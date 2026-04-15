@@ -1,0 +1,1455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Spotify Thinks: AI Recommendations & Personalization at Scale</title>
+<meta name="description" content="A deep-dive into how Spotify uses collaborative filtering, implicit signals, and data infrastructure to serve 751 million users. Built in MIS 432: AI in Business at Western Washington University.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   TOKENS & RESET
+═══════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#1DB954; --green-dk:#17a349; --green-dim:rgba(29,185,84,.15);
+  --bg:#121212; --bg2:#191414; --surface:#1E1E1E; --card:#282828; --hover:#303030;
+  --white:#FFFFFF; --muted:#B3B3B3; --dim:#6A6A6A;
+  --skip:#E25454; --play:#F0A500; --replay:#1DB954;
+  --border:rgba(255,255,255,0.08); --border2:rgba(255,255,255,0.14);
+  --serif:'DM Serif Display',Georgia,serif;
+  --sans:'DM Sans',system-ui,sans-serif;
+  --playbar-h:88px;
+}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--white);
+  font-family:var(--sans); font-size:16px; line-height:1.7;
+  min-height:100vh; overflow-x:hidden;
+  padding-bottom:var(--playbar-h);
+}
+a{color:var(--green); text-decoration:none}
+a:hover{text-decoration:underline}
+img{max-width:100%}
+button{font-family:var(--sans)}
+
+/* ═══════════════════════════════════════════════════════════
+   NAV
+═══════════════════════════════════════════════════════════ */
+nav{
+  position:sticky; top:0; z-index:100;
+  background:rgba(18,18,18,.92); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  padding:0 40px; height:60px;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:-.2px}
+.nav-logo svg{flex-shrink:0}
+.nav-links{display:flex;gap:28px}
+.nav-links a{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:.3px;transition:color .2s}
+.nav-links a:hover{color:var(--white);text-decoration:none}
+.nav-badge{
+  font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
+  background:var(--green-dim);color:var(--green);
+  padding:4px 10px;border-radius:20px;border:1px solid rgba(29,185,84,.25);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HERO
+═══════════════════════════════════════════════════════════ */
+.hero{
+  position:relative; overflow:hidden;
+  background:var(--bg2);
+  padding:100px 40px 80px;
+  border-bottom:1px solid var(--border);
+}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse 70% 60% at 60% 40%, rgba(29,185,84,.07) 0%, transparent 70%);
+  pointer-events:none;
+}
+.hero-inner{max-width:800px;margin:0 auto;position:relative}
+.hero-kicker{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--green);margin-bottom:24px;
+}
+.hero-kicker::before{content:'';width:24px;height:1px;background:var(--green)}
+.hero h1{
+  font-family:var(--serif);font-size:clamp(36px,5vw,68px);
+  font-weight:400;line-height:1.1;letter-spacing:-.5px;
+  margin-bottom:24px;
+}
+.hero h1 em{font-style:italic;color:var(--green)}
+.hero-sub{
+  font-size:18px;color:var(--muted);line-height:1.7;
+  max-width:620px;margin-bottom:40px;font-weight:300;
+}
+.hero-meta{
+  display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+  font-size:13px;color:var(--dim);
+}
+.hero-meta span{display:flex;align-items:center;gap:6px}
+.hero-cta{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--green);color:#121212;
+  font-weight:700;font-size:13px;letter-spacing:.5px;text-transform:uppercase;
+  padding:12px 24px;border-radius:50px;border:none;cursor:pointer;
+  transition:background .2s,transform .1s;text-decoration:none;
+}
+.hero-cta:hover{background:var(--green-dk);text-decoration:none;transform:scale(1.02)}
+
+/* ═══════════════════════════════════════════════════════════
+   LAYOUT CONTAINERS
+═══════════════════════════════════════════════════════════ */
+.section{padding:80px 40px;border-bottom:1px solid var(--border)}
+.section-inner{max-width:860px;margin:0 auto}
+.section-wide{max-width:1200px;margin:0 auto}
+.section-label{
+  font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;
+  color:var(--green);margin-bottom:16px;display:flex;align-items:center;gap:8px;
+}
+.section-label::after{content:'';flex:1;height:1px;background:var(--green-dim)}
+.section h2{
+  font-family:var(--serif);font-size:clamp(28px,3.5vw,44px);
+  font-weight:400;line-height:1.15;letter-spacing:-.3px;margin-bottom:20px;
+}
+.section h2 em{font-style:italic;color:var(--green)}
+.section p{color:var(--muted);margin-bottom:16px;font-size:16px;line-height:1.8}
+.section p strong{color:var(--white);font-weight:500}
+.section p:last-child{margin-bottom:0}
+
+/* ═══════════════════════════════════════════════════════════
+   BUSINESS STORY — CONCEPT CARDS
+═══════════════════════════════════════════════════════════ */
+.concept-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  gap:16px;margin-top:40px;
+}
+.concept-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:24px;transition:border-color .2s,background .2s;
+}
+.concept-card:hover{border-color:var(--border2);background:var(--hover)}
+.concept-icon{
+  width:40px;height:40px;border-radius:10px;
+  background:var(--green-dim);border:1px solid rgba(29,185,84,.2);
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:16px;font-size:18px;
+}
+.concept-card h3{font-size:16px;font-weight:700;margin-bottom:8px;letter-spacing:-.2px}
+.concept-card p{font-size:13px;color:var(--muted);line-height:1.65;margin:0}
+
+/* ═══════════════════════════════════════════════════════════
+   PULL QUOTE
+═══════════════════════════════════════════════════════════ */
+.pull-quote{
+  margin:48px 0;padding:32px 40px;
+  border-left:3px solid var(--green);
+  background:var(--surface);border-radius:0 12px 12px 0;
+}
+.pull-quote blockquote{
+  font-family:var(--serif);font-size:clamp(20px,2.5vw,28px);
+  font-style:italic;line-height:1.4;color:var(--white);margin-bottom:12px;
+}
+.pull-quote cite{font-size:12px;color:var(--dim);font-style:normal;letter-spacing:.5px;text-transform:uppercase}
+
+/* ═══════════════════════════════════════════════════════════
+   STAT CALLOUTS
+═══════════════════════════════════════════════════════════ */
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:40px 0}
+.stat-box{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:24px 20px;text-align:center;
+}
+.stat-box .num{
+  font-family:var(--serif);font-size:clamp(32px,4vw,52px);
+  color:var(--green);line-height:1;margin-bottom:8px;
+}
+.stat-box .lbl{font-size:12px;color:var(--muted);letter-spacing:.5px;line-height:1.5}
+
+/* ═══════════════════════════════════════════════════════════
+   PIPELINE DIAGRAM
+═══════════════════════════════════════════════════════════ */
+.pipeline{
+  display:flex;align-items:stretch;gap:0;
+  margin:40px 0;overflow-x:auto;padding-bottom:4px;
+}
+.pipe-step{
+  flex:1;min-width:120px;background:var(--card);
+  border:1px solid var(--border);padding:20px 16px;
+  position:relative;text-align:center;
+}
+.pipe-step:first-child{border-radius:12px 0 0 12px}
+.pipe-step:last-child{border-radius:0 12px 12px 0}
+.pipe-step+.pipe-step::before{
+  content:'→';position:absolute;left:-14px;top:50%;transform:translateY(-50%);
+  font-size:18px;color:var(--green);z-index:1;background:var(--bg);
+  width:28px;text-align:center;
+}
+.pipe-step .ps-icon{font-size:22px;margin-bottom:8px}
+.pipe-step .ps-label{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--white);margin-bottom:4px}
+.pipe-step .ps-sub{font-size:11px;color:var(--dim);line-height:1.4}
+
+/* ═══════════════════════════════════════════════════════════
+   KEY LESSONS
+═══════════════════════════════════════════════════════════ */
+.lessons{display:flex;flex-direction:column;gap:16px;margin-top:32px}
+.lesson{
+  display:grid;grid-template-columns:48px 1fr;gap:16px;align-items:start;
+  background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px 20px;
+}
+.lesson-num{
+  width:40px;height:40px;border-radius:50%;
+  background:var(--green);color:#121212;
+  font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.lesson h3{font-size:16px;font-weight:700;margin-bottom:6px;letter-spacing:-.2px}
+.lesson p{font-size:14px;color:var(--muted);margin:0;line-height:1.65}
+
+/* ═══════════════════════════════════════════════════════════
+   DEMO SECTION HEADER
+═══════════════════════════════════════════════════════════ */
+#demo{background:var(--bg2);padding:60px 40px 0}
+.demo-header{max-width:1200px;margin:0 auto;padding-bottom:40px;border-bottom:1px solid var(--border)}
+.demo-header h2{
+  font-family:var(--serif);font-size:clamp(28px,3.5vw,42px);
+  font-weight:400;margin-bottom:12px;
+}
+.demo-header p{font-size:15px;color:var(--muted);max-width:640px}
+.spotify-connect-row{display:flex;align-items:center;gap:12px;margin-top:20px;flex-wrap:wrap}
+.btn-spotify-connect{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--green);color:#121212;
+  font-weight:700;font-size:13px;letter-spacing:.3px;
+  padding:10px 20px;border-radius:50px;border:none;cursor:pointer;
+  transition:background .2s,transform .1s;
+}
+.btn-spotify-connect:hover{background:var(--green-dk);transform:scale(1.02)}
+.btn-spotify-connect.connected{background:#333;color:var(--green);border:1px solid rgba(29,185,84,.3)}
+.connect-note{font-size:12px;color:var(--dim)}
+.mode-pill{
+  font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+  padding:4px 10px;border-radius:20px;
+}
+.mode-demo{background:rgba(240,165,0,.15);color:var(--play);border:1px solid rgba(240,165,0,.2)}
+.mode-premium{background:var(--green-dim);color:var(--green);border:1px solid rgba(29,185,84,.2)}
+
+/* ═══════════════════════════════════════════════════════════
+   TWO-COLUMN DEMO LAYOUT
+═══════════════════════════════════════════════════════════ */
+.demo-layout{
+  max-width:1200px;margin:0 auto;
+  display:grid;grid-template-columns:1fr 360px;gap:0;
+  background:var(--bg2);
+  min-height:600px;
+}
+.demo-left{padding:32px 36px 32px 0;border-right:1px solid var(--border)}
+.demo-right{padding:32px 0 32px 28px;display:flex;flex-direction:column;gap:28px}
+
+/* ═══════════════════════════════════════════════════════════
+   SECTION TITLES (within demo)
+═══════════════════════════════════════════════════════════ */
+.panel-title{
+  font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:16px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   STATS STRIP
+═══════════════════════════════════════════════════════════ */
+.stats-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px}
+.stat-mini{background:var(--card);border-radius:8px;padding:12px;text-align:center;border:1px solid var(--border)}
+.stat-mini .sn{font-size:24px;font-weight:700;line-height:1}
+.stat-mini .sl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-top:4px}
+.c-skip{color:var(--skip)} .c-play{color:var(--play)} .c-rep{color:var(--replay)}
+
+/* ═══════════════════════════════════════════════════════════
+   SONG CATALOG
+═══════════════════════════════════════════════════════════ */
+.song-list{display:flex;flex-direction:column;gap:5px}
+.song-row{
+  display:grid;grid-template-columns:28px 1fr auto;
+  align-items:center;gap:10px;
+  background:var(--card);border-radius:8px;padding:9px 12px;
+  border:1px solid transparent;transition:background .15s,border-color .15s;
+  cursor:default;
+}
+.song-row:hover{background:var(--hover);border-color:var(--border)}
+.song-row.interacted{border-color:rgba(29,185,84,.2)}
+.song-row.now-playing{
+  border-color:var(--green)!important;
+  background:rgba(29,185,84,.06)!important;
+}
+.song-num{font-size:12px;color:var(--dim);text-align:center;font-variant-numeric:tabular-nums}
+.now-playing .song-num{color:var(--green)}
+.eq-bars{display:flex;align-items:flex-end;gap:2px;height:14px}
+.eq-bars span{
+  display:block;width:3px;background:var(--green);border-radius:1px;
+  animation:eq .6s ease-in-out infinite alternate;
+}
+.eq-bars span:nth-child(2){animation-delay:.2s;height:60%}
+.eq-bars span:nth-child(3){animation-delay:.4s;height:90%}
+@keyframes eq{from{height:30%}to{height:100%}}
+.song-info .sname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.song-info .smeta{font-size:11px;color:var(--muted);margin-top:1px}
+.genre-pill{
+  display:inline-block;font-size:9px;font-weight:700;letter-spacing:.5px;
+  text-transform:uppercase;padding:1px 6px;border-radius:20px;margin-left:5px;
+}
+.gp-Pop{background:rgba(29,185,84,.12);color:#1DB954}
+.gp-Hip-Hop{background:rgba(240,165,0,.12);color:#F0A500}
+.gp-Indie{background:rgba(150,100,255,.12);color:#a07cf5}
+.gp-Indie-Pop{background:rgba(255,100,180,.12);color:#f56eb3}
+.gp-R-B{background:rgba(80,180,255,.12);color:#50b4ff}
+.gp-Pop-Rock{background:rgba(255,130,60,.12);color:#ff823c}
+.btn-group{display:flex;gap:5px;flex-shrink:0}
+.btn{
+  font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+  border:none;border-radius:20px;padding:5px 10px;cursor:pointer;
+  transition:transform .1s,opacity .15s,filter .15s;opacity:.82;
+}
+.btn:hover{opacity:1;transform:scale(1.06)}
+.btn:active{transform:scale(.96)}
+.btn.active{opacity:1;box-shadow:0 0 0 2px rgba(255,255,255,.25)}
+.btn-skip{background:var(--skip);color:#fff}
+.btn-play{background:var(--play);color:#121212}
+.btn-replay{background:var(--replay);color:#121212}
+
+/* ═══════════════════════════════════════════════════════════
+   RIGHT PANEL — RECOMMENDATIONS
+═══════════════════════════════════════════════════════════ */
+.rec-list{display:flex;flex-direction:column;gap:8px}
+.rec-card{
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;transition:border-color .2s;
+}
+.rec-card:hover{border-color:var(--border2)}
+.rc-rank{font-size:9px;color:var(--dim);margin-bottom:3px;text-transform:uppercase;letter-spacing:.6px}
+.rc-name{font-size:14px;font-weight:700;letter-spacing:-.2px}
+.rc-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.score-bar-bg{margin-top:8px;background:rgba(255,255,255,.07);border-radius:3px;height:3px;overflow:hidden}
+.score-bar{height:100%;background:var(--green);border-radius:3px;transition:width .5s ease}
+.score-label{font-size:9px;color:var(--dim);margin-top:3px;text-align:right}
+.no-data{font-size:12px;color:var(--dim);text-align:center;padding:20px 0;line-height:1.7}
+
+/* ═══════════════════════════════════════════════════════════
+   SIMILARITY BARS
+═══════════════════════════════════════════════════════════ */
+.sim-list{display:flex;flex-direction:column;gap:6px}
+.sim-row{display:flex;align-items:center;gap:8px}
+.sim-lbl{font-size:11px;color:var(--muted);width:62px;flex-shrink:0}
+.sim-bar-bg{flex:1;background:rgba(255,255,255,.07);border-radius:3px;height:5px;overflow:hidden}
+.sim-bar{height:100%;border-radius:3px;transition:width .4s ease}
+.sim-val{font-size:10px;color:var(--dim);width:30px;text-align:right}
+
+/* ═══════════════════════════════════════════════════════════
+   SIGNAL LOG
+═══════════════════════════════════════════════════════════ */
+.log-box{
+  background:#0a0a0a;border:1px solid var(--border);border-radius:8px;
+  padding:10px 12px;font-family:'Courier New',monospace;font-size:10.5px;
+  height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;
+}
+.log-row{display:flex;gap:8px;line-height:1.5}
+.log-ts{color:#444;flex-shrink:0}
+.log-msg{color:#888}
+.hl-s{color:var(--skip);font-weight:700}
+.hl-p{color:var(--play);font-weight:700}
+.hl-r{color:var(--replay);font-weight:700}
+.log-empty{color:#333;font-style:italic}
+
+/* ═══════════════════════════════════════════════════════════
+   WRAPPED BUTTON
+═══════════════════════════════════════════════════════════ */
+.wrapped-btn-wrap{margin-bottom:20px}
+.btn-wrapped{
+  width:100%;padding:13px;border-radius:50px;border:none;cursor:pointer;
+  font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+  font-family:var(--sans);
+  transition:background .25s,opacity .2s,transform .1s;
+  background:#2a2a2a;color:#555;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.btn-wrapped.ready{
+  background:var(--green);color:#121212;pointer-events:auto;
+  animation:pulse-green 2.5s ease-in-out infinite;
+}
+.btn-wrapped.ready:hover{background:var(--green-dk);transform:scale(1.02);animation:none}
+.btn-wrapped.ready:active{transform:scale(.98)}
+@keyframes pulse-green{
+  0%,100%{box-shadow:0 0 0 0 rgba(29,185,84,.35)}
+  50%{box-shadow:0 0 0 10px rgba(29,185,84,0)}
+}
+.wrapped-progress{font-size:11px;color:var(--dim);text-align:center;margin-top:6px;transition:opacity .2s}
+
+/* ═══════════════════════════════════════════════════════════
+   WRAPPED PANEL
+═══════════════════════════════════════════════════════════ */
+.wrapped-panel{
+  display:none;margin-top:32px;
+  background:#191414;border:1px solid rgba(29,185,84,.25);
+  border-radius:16px;padding:32px;
+  animation:fadeUp .4s ease;
+}
+.wrapped-panel.show{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.wp-header{display:flex;align-items:center;gap:12px;margin-bottom:28px}
+.wp-badge{
+  background:var(--green);color:#121212;
+  font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+  padding:4px 10px;border-radius:20px;flex-shrink:0;
+}
+.wp-title{font-family:var(--serif);font-size:28px;font-weight:400}
+.wp-sub{font-size:13px;color:var(--muted);margin-top:2px}
+.wp-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px}
+.wp-stat{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+.wp-stat .wsn{font-size:28px;font-weight:700;line-height:1}
+.wp-stat .wsl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-top:5px}
+.wp-songs{margin-bottom:24px}
+.wp-song-row{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 0;border-bottom:1px solid var(--border);
+}
+.wp-song-row:last-child{border-bottom:none}
+.wps-rank{font-family:var(--serif);font-size:22px;color:var(--green);width:28px;flex-shrink:0}
+.wps-info .wps-name{font-size:14px;font-weight:700}
+.wps-info .wps-meta{font-size:12px;color:var(--muted);margin-top:1px}
+.wps-pill{
+  margin-left:auto;flex-shrink:0;
+  font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;
+}
+.pp-replay{background:rgba(29,185,84,.18);color:var(--green)}
+.pp-play{background:rgba(240,165,0,.18);color:var(--play)}
+.pp-skip{background:rgba(226,84,84,.18);color:var(--skip)}
+.wp-highlights{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
+.wp-hl{
+  background:rgba(29,185,84,.07);border:1px solid rgba(29,185,84,.18);
+  border-radius:10px;padding:16px;
+}
+.wp-hl .whl-lbl{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:6px}
+.wp-hl .whl-val{font-size:17px;font-weight:700;line-height:1.3}
+.wp-hl .whl-sub{font-size:11px;color:var(--muted);margin-top:4px}
+.wp-fun{
+  background:rgba(29,185,84,.1);border-left:3px solid var(--green);
+  border-radius:0 8px 8px 0;padding:14px 18px;margin-bottom:20px;
+  font-size:14px;line-height:1.6;
+}
+.wp-fun strong{color:var(--green)}
+.wp-note{
+  border-top:1px solid var(--border);padding-top:14px;
+  font-size:11px;color:var(--dim);line-height:1.7;
+  display:flex;gap:8px;
+}
+.wp-note-icon{color:var(--green);flex-shrink:0;margin-top:1px}
+
+/* ═══════════════════════════════════════════════════════════
+   BOTTOM PLAYBAR
+═══════════════════════════════════════════════════════════ */
+#playbar{
+  position:fixed;bottom:0;left:0;right:0;z-index:200;
+  height:var(--playbar-h);
+  background:rgba(24,20,20,.97);
+  backdrop-filter:blur(20px);
+  border-top:1px solid var(--border2);
+  display:grid;grid-template-columns:1fr auto 1fr;
+  align-items:center;padding:0 24px;gap:16px;
+}
+.pb-track{display:flex;align-items:center;gap:12px;min-width:0}
+.pb-art{
+  width:44px;height:44px;border-radius:6px;
+  background:var(--card);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  font-size:20px;overflow:hidden;
+}
+.pb-track-info{min-width:0}
+.pb-track-info .pb-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pb-track-info .pb-artist{font-size:11px;color:var(--muted)}
+.pb-controls{display:flex;flex-direction:column;align-items:center;gap:6px}
+.pb-btns{display:flex;align-items:center;gap:10px}
+.pb-btn{
+  background:transparent;border:none;cursor:pointer;color:var(--muted);
+  padding:6px;border-radius:50%;transition:color .15s,background .15s;
+  display:flex;align-items:center;justify-content:center;
+}
+.pb-btn:hover{color:var(--white);background:rgba(255,255,255,.08)}
+.pb-btn.main-btn{
+  width:36px;height:36px;background:var(--white);color:#121212;border-radius:50%;
+  transition:transform .1s,background .15s;
+}
+.pb-btn.main-btn:hover{transform:scale(1.08);background:#ddd}
+.pb-progress{width:100%;max-width:400px;display:flex;align-items:center;gap:8px}
+.pb-time{font-size:10px;color:var(--dim);width:32px;flex-shrink:0;font-variant-numeric:tabular-nums}
+.pb-progress-bar{flex:1;height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;cursor:pointer}
+.pb-fill{height:100%;background:var(--green);border-radius:2px;transition:width .5s linear;width:0%}
+.pb-progress-bar:hover .pb-fill{background:#fff}
+.pb-right{display:flex;justify-content:flex-end;align-items:center;gap:8px}
+.pb-vol{display:flex;align-items:center;gap:6px}
+.pb-vol input[type=range]{
+  width:80px;height:4px;-webkit-appearance:none;appearance:none;
+  background:rgba(255,255,255,.15);border-radius:2px;cursor:pointer;
+}
+.pb-vol input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+  background:var(--white);cursor:pointer;
+}
+.pb-idle .pb-name{color:var(--dim);font-weight:400}
+
+/* ═══════════════════════════════════════════════════════════
+   FOOTER
+═══════════════════════════════════════════════════════════ */
+footer{
+  background:var(--bg2);border-top:1px solid var(--border);
+  padding:48px 40px;text-align:center;
+  font-size:13px;color:var(--dim);line-height:1.8;
+}
+footer strong{color:var(--muted)}
+footer a{color:var(--green)}
+.footer-inner{max-width:600px;margin:0 auto}
+.footer-logo{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:16px}
+.footer-badge{
+  display:inline-block;margin-top:12px;
+  background:var(--green-dim);color:var(--green);
+  font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
+  padding:5px 14px;border-radius:20px;border:1px solid rgba(29,185,84,.2);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════════════════════ */
+@media(max-width:900px){
+  nav{padding:0 20px}
+  .nav-links{display:none}
+  .hero{padding:60px 20px 50px}
+  .section{padding:60px 20px}
+  #demo{padding:40px 20px 0}
+  .demo-layout{grid-template-columns:1fr}
+  .demo-left{padding:24px 0;border-right:none;border-bottom:1px solid var(--border)}
+  .demo-right{padding:24px 0}
+  .stat-row{grid-template-columns:1fr}
+  .wp-stats{grid-template-columns:repeat(2,1fr)}
+  .wp-highlights{grid-template-columns:1fr}
+  footer{padding:40px 20px}
+}
+@media(max-width:600px){
+  .pipeline{flex-direction:column}
+  .pipe-step{border-radius:8px!important;margin-bottom:8px}
+  .pipe-step+.pipe-step::before{content:'↓';left:50%;top:-20px;transform:translateX(-50%)}
+  .pb-right{display:none}
+  playbar{grid-template-columns:1fr auto}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     NAV
+════════════════════════════════════════════════════════════ -->
+<nav>
+  <div class="nav-logo">
+    <svg width="24" height="24" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="12" fill="#1DB954"/>
+      <path d="M6.5 9.5c3-1 7-1 9.5.5M7 12.5c2.5-.8 6-.8 8 .5M8 15.5c2-.6 4.5-.6 6.5.3"
+        stroke="#191414" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    </svg>
+    How Spotify Thinks
+  </div>
+  <div class="nav-links">
+    <a href="#story">The Story</a>
+    <a href="#concepts">Key Concepts</a>
+    <a href="#demo">Live Demo</a>
+    <a href="#lessons">Lessons</a>
+  </div>
+  <span class="nav-badge">MIS 432 · WWU</span>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════
+     HERO
+════════════════════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-kicker">MIS 432: AI in Business</div>
+    <h1>How Spotify turned<br><em>100 million songs</em><br>into a personal DJ</h1>
+    <p class="hero-sub">
+      A deep-dive into the recommendation engine, data infrastructure, and AI strategy
+      that made Spotify the world's most personalized music platform — built from scratch
+      in Python, then deployed as a live interactive system.
+    </p>
+    <div class="hero-meta">
+      <span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Western Washington University
+      </span>
+      <span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        College of Business &amp; Economics
+      </span>
+      <span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Collaborative Filtering · Cosine Similarity · Spotify OAuth
+      </span>
+    </div>
+    <br>
+    <a href="#demo" class="hero-cta">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Try the Live Demo
+    </a>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PART 1 — THE BUSINESS STORY
+════════════════════════════════════════════════════════════ -->
+<section class="section" id="story">
+  <div class="section-inner">
+    <div class="section-label">The Business Problem</div>
+    <h2>751 million users.<br><em>100 million songs.</em><br>One impossible question.</h2>
+
+    <div class="stat-row">
+      <div class="stat-box"><div class="num">751M</div><div class="lbl">Monthly active users<br>across 180+ countries</div></div>
+      <div class="stat-box"><div class="num">100M+</div><div class="lbl">Songs in the catalog —<br>growing by 60,000 per day</div></div>
+      <div class="stat-box"><div class="num">4B+</div><div class="lbl">Playlist streams per day<br>driven by personalization</div></div>
+    </div>
+
+    <p>Spotify's core problem is a paradox of choice. With 100 million songs, giving every user the same "top hits" playlist would be like a bookstore recommending the same five bestsellers to every customer who walks in. <strong>Most people would eventually stop coming back.</strong></p>
+
+    <p>The solution wasn't to hire more music curators. It was to build an AI system that could learn each individual user's taste from their behavior — automatically, at scale, without anyone having to fill out a survey or rate a song. The recommendation engine isn't a feature on top of Spotify's product. <strong>It is Spotify's product.</strong></p>
+
+    <div class="pull-quote">
+      <blockquote>"If Spotify's recommendations were a radio station, it would be the most personal radio station in history — one that only plays songs you'll love, before you even know you love them."</blockquote>
+      <cite>The insight behind Discover Weekly, Spotify's breakthrough product</cite>
+    </div>
+
+    <p>In this project, I built the core of that system from scratch: a working recommendation engine that creates user profiles from behavioral data, calculates taste similarity using cosine similarity, and generates personalized song recommendations in real time. Then I deployed it as an interactive web application — the one you can use on this page.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════
+     KEY CONCEPTS
+════════════════════════════════════════════════════════════ -->
+<section class="section" id="concepts" style="background:var(--bg2)">
+  <div class="section-inner">
+    <div class="section-label">What I Built &amp; Learned</div>
+    <h2>Eight ideas that power<br><em>modern AI personalization</em></h2>
+
+    <div class="concept-grid">
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3>Implicit Signals</h3>
+        <p>Instead of asking users to rate songs, Spotify watches what they actually do: a skip after 8 seconds is a 0.1, a single play is a 0.5, and a third replay at 2am is a 0.9. <strong>Behavior is more honest than ratings</strong> — people can't fake a skip.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        </div>
+        <h3>Feature Engineering</h3>
+        <p>Raw listening events become structured features: skip_rate, replay_rate, top_genre_affinity. The model doesn't learn from "user played song" — it learns from numbers. <strong>The quality of your features determines the quality of your model.</strong> This is where most AI projects succeed or fail.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </div>
+        <h3>Collaborative Filtering</h3>
+        <p>The engine finds your "taste twins" — users whose listening history points in the same direction as yours — then recommends songs they loved that you haven't heard yet. <strong>The algorithm never needs to understand music</strong>, only patterns among listeners.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><path d="M2 12h4M18 12h4M12 2v4M12 18v4"/><circle cx="12" cy="12" r="4"/></svg>
+        </div>
+        <h3>Cosine Similarity</h3>
+        <p>Each user is represented as an arrow in space, where every song is a dimension. Cosine similarity measures the <em>angle</em> between two arrows — <strong>same direction = same taste</strong>, regardless of how much either person listens. Two users can be taste-twins even if one streams all day and the other only plays music on weekends.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        </div>
+        <h3>Unsupervised Clustering</h3>
+        <p>Spotify groups 751 million users into taste clusters without any human labeling them first. Labels like "late-night chill" or "workout hip-hop" emerge from behavioral patterns, not editorial decisions. <strong>The algorithm discovers categories humans never thought to look for.</strong></p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        </div>
+        <h3>Embeddings</h3>
+        <p>Spotify converts songs and users into lists of numbers (vectors) that capture meaning — similar-sounding songs cluster near each other in this mathematical space. <strong>This is how the algorithm "understands" that two songs are alike</strong> without a human ever explaining why.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <h3>The Training-Serving Gap</h3>
+        <p>A model trained on summer listening habits will quietly fail in winter — confidently making bad recommendations while no alarm goes off. <strong>Silent failure is more dangerous than a crash</strong>, because by the time anyone notices the drop in engagement, user trust has already eroded.</p>
+      </div>
+
+      <div class="concept-card">
+        <div class="concept-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3>AI Governance &amp; the Data Moat</h3>
+        <p>Every skip and replay is a competitive asset. Spotify has collected behavioral data from 751 million users for 15+ years — <strong>a dataset that cannot be replicated</strong>. This is the "data moat": a structural advantage that compounds over time and makes the recommendation engine harder to copy than any algorithm.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- Pipeline diagram -->
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">How It Works End-to-End</div>
+    <h2>From a skip to a<br><em>personalized playlist</em></h2>
+    <p>Every interaction you have with Spotify travels through this pipeline in milliseconds — from the moment you skip a song to the moment a recommendation appears.</p>
+
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="ps-icon">👆</div>
+        <div class="ps-label">User Action</div>
+        <div class="ps-sub">Skip, play, replay — captured as 0.1, 0.5, 0.9</div>
+      </div>
+      <div class="pipe-step">
+        <div class="ps-icon">⚡</div>
+        <div class="ps-label">Signal Log</div>
+        <div class="ps-sub">Timestamped event stored in the data pipeline</div>
+      </div>
+      <div class="pipe-step">
+        <div class="ps-icon">🔧</div>
+        <div class="ps-label">Feature Eng.</div>
+        <div class="ps-sub">Raw events → skip rate, replay rate, genre affinity</div>
+      </div>
+      <div class="pipe-step">
+        <div class="ps-icon">📐</div>
+        <div class="ps-label">Similarity</div>
+        <div class="ps-sub">Cosine similarity finds taste twins</div>
+      </div>
+      <div class="pipe-step">
+        <div class="ps-icon">🎯</div>
+        <div class="ps-label">Predict</div>
+        <div class="ps-sub">Weighted avg of twins' scores on unheard songs</div>
+      </div>
+      <div class="pipe-step">
+        <div class="ps-icon">🎵</div>
+        <div class="ps-label">Recommend</div>
+        <div class="ps-sub">Top predicted songs surface in your feed</div>
+      </div>
+    </div>
+
+    <p style="margin-top:24px">Notice that <strong>Spotify Wrapped runs on this exact same pipeline at zero marginal cost</strong>. The top artist, top genre, and total minutes listened are computed by sorting and aggregating data that was already collected for recommendations. Wrapped isn't a separate product — it's a visualization of infrastructure that already exists.</p>
+  </div>
+</section>
+
+<!-- Key Lessons -->
+<section class="section" id="lessons" style="background:var(--bg2)">
+  <div class="section-inner">
+    <div class="section-label">What This Teaches Business Leaders</div>
+    <h2>Three lessons every<br><em>manager should know</em></h2>
+
+    <div class="lessons">
+      <div class="lesson">
+        <div class="lesson-num">1</div>
+        <div>
+          <h3>Data is a compounding asset, not a cost center</h3>
+          <p>Every user interaction Spotify captures makes its next recommendation slightly better. After 15 years and 751 million users, this behavioral dataset is worth more than any algorithm. The lesson: <strong>building data collection infrastructure early creates a moat that compounds for decades</strong>, not quarters. Companies that wait until they "need AI" have already lost the race.</p>
+        </div>
+      </div>
+      <div class="lesson">
+        <div class="lesson-num">2</div>
+        <div>
+          <h3>AI governance is a business problem, not an IT problem</h3>
+          <p>The training-serving gap doesn't crash systems — it silently erodes engagement. When a recommendation model trained in summer serves winter users, no alarm fires. Revenue drops slowly, users disengage quietly, and by the time the analytics team traces the cause, the damage is done. <strong>Business leaders must own model monitoring</strong> the same way they own quarterly forecasts — because a drifting model is a slow-moving financial risk.</p>
+        </div>
+      </div>
+      <div class="lesson">
+        <div class="lesson-num">3</div>
+        <div>
+          <h3>Personalization is the product — not a feature</h3>
+          <p>Spotify could have built a music catalog with a search bar. Instead, it built a system that learns your taste and surfaces music you didn't know you wanted. <strong>The recommendation engine generates more listening time, more subscription upgrades, and more artist discovery</strong> than any editorial team ever could. The business model only works because the AI works. That's the template: make AI inseparable from the value your product delivers.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PART 2 — LIVE DEMO
+════════════════════════════════════════════════════════════ -->
+<section id="demo">
+  <div class="demo-header">
+    <div class="section-label" style="margin-bottom:10px">Part 2 — Live System</div>
+    <h2>The Recommendation Engine — Live</h2>
+    <p>Rate songs below. The collaborative filtering algorithm runs in real time in your browser — the same cosine similarity logic built in Python, now deployed as a working product.</p>
+    <div class="spotify-connect-row">
+      <button class="btn-spotify-connect" id="btn-connect" onclick="handleSpotifyConnect()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="12" fill="none"/><path d="M6.5 9.5c3-1 7-1 9.5.5M7 12.5c2.5-.8 6-.8 8 .5M8 15.5c2-.6 4.5-.6 6.5.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+        Connect Spotify Premium
+      </button>
+      <span class="mode-pill mode-demo" id="mode-pill">Demo Mode</span>
+      <span class="connect-note" id="connect-note">Connect Spotify Premium to stream real audio. Demo mode simulates playback.</span>
+    </div>
+  </div>
+
+  <!-- Two-column layout -->
+  <div class="demo-layout" style="padding:32px 40px;max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 340px;gap:40px">
+
+    <!-- ── LEFT: Song catalog ─────────────────────────────── -->
+    <div class="demo-left" style="padding-right:40px;border-right:1px solid var(--border)">
+
+      <!-- Stats strip + Wrapped button -->
+      <div style="display:grid;grid-template-columns:1fr auto;align-items:start;gap:16px;margin-bottom:20px">
+        <div>
+          <div class="panel-title">Your Session</div>
+          <div class="stats-strip" style="grid-template-columns:repeat(3,1fr)">
+            <div class="stat-mini"><div class="sn c-skip" id="cnt-s">0</div><div class="sl">Skipped</div></div>
+            <div class="stat-mini"><div class="sn c-play" id="cnt-p">0</div><div class="sl">Played</div></div>
+            <div class="stat-mini"><div class="sn c-rep"  id="cnt-r">0</div><div class="sl">Replayed</div></div>
+          </div>
+        </div>
+        <div style="padding-top:24px">
+          <button class="btn-wrapped" id="btn-wrapped" onclick="generateWrapped()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            My Wrapped
+          </button>
+          <div class="wrapped-progress" id="wp-prog">Rate 5 songs</div>
+        </div>
+      </div>
+
+      <div class="panel-title">Song Catalog — Skip, Play, or Replay</div>
+      <div class="song-list" id="song-list"></div>
+
+      <!-- Wrapped panel appears here after generation -->
+      <div class="wrapped-panel" id="wrapped-panel"></div>
+    </div>
+
+    <!-- ── RIGHT: Recs + twins + log ─────────────────────── -->
+    <div class="demo-right">
+
+      <!-- Recommendations -->
+      <div>
+        <div class="panel-title">Recommended for You</div>
+        <div class="rec-list" id="rec-list">
+          <div class="no-data">Rate a song to generate recommendations.</div>
+        </div>
+      </div>
+
+      <!-- Taste twins -->
+      <div>
+        <div class="panel-title">Your Taste Twins</div>
+        <div class="sim-list" id="sim-list">
+          <div class="no-data">Rate songs to find your taste twins.</div>
+        </div>
+      </div>
+
+      <!-- Signal log -->
+      <div>
+        <div class="panel-title">Live Signal Log</div>
+        <div class="log-box" id="log-box">
+          <span class="log-empty">Waiting for interactions…</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════
+     FOOTER
+════════════════════════════════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-logo">
+      <svg width="28" height="28" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="12" fill="#1DB954"/>
+        <path d="M6.5 9.5c3-1 7-1 9.5.5M7 12.5c2.5-.8 6-.8 8 .5M8 15.5c2-.6 4.5-.6 6.5.3"
+          stroke="#191414" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <strong style="color:var(--white)">How Spotify Thinks</strong>
+    </div>
+    <p>This project was completed as part of <strong>MIS 432: AI in Business</strong> at
+    <strong>Western Washington University's College of Business and Economics</strong>.</p>
+    <p style="margin-top:8px">The recommendation engine, feature engineering pipeline, and Wrapped generator
+    were built from scratch using Python (pandas, scikit-learn) and deployed here as a standalone web application.
+    Spotify OAuth integration uses the PKCE flow. All collaborative filtering logic runs client-side in JavaScript.</p>
+    <p style="margin-top:8px;font-size:12px">
+      Song data used for educational demonstration only.
+      Spotify® is a trademark of Spotify AB. This project has no affiliation with Spotify AB.
+    </p>
+    <span class="footer-badge">MIS 432 · AI in Business · WWU · 2025</span>
+  </div>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PLAYBAR
+════════════════════════════════════════════════════════════ -->
+<div id="playbar">
+  <div class="pb-track pb-idle" id="pb-track">
+    <div class="pb-art" id="pb-art">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    </div>
+    <div class="pb-track-info">
+      <div class="pb-name" id="pb-name">Nothing playing</div>
+      <div class="pb-artist" id="pb-artist">Rate a song to start</div>
+    </div>
+  </div>
+  <div class="pb-controls">
+    <div class="pb-btns">
+      <button class="pb-btn" onclick="pbStop()" title="Stop">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      </button>
+      <button class="pb-btn main-btn" id="pb-play-btn" onclick="pbToggle()">
+        <svg id="pb-icon-play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <svg id="pb-icon-pause" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
+    </div>
+    <div class="pb-progress">
+      <span class="pb-time" id="pb-elapsed">0:00</span>
+      <div class="pb-progress-bar" onclick="pbSeek(event)"><div class="pb-fill" id="pb-fill"></div></div>
+      <span class="pb-time" id="pb-duration">3:30</span>
+    </div>
+  </div>
+  <div class="pb-right">
+    <div class="pb-vol">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+      <input type="range" min="0" max="100" value="80" id="vol-slider" oninput="setVolume(this.value)">
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     JAVASCRIPT — Full Application Logic
+     Sections:
+       1. Song catalog data
+       2. Pre-defined user data (9 users)
+       3. Collaborative filtering engine (cosine similarity)
+       4. Playback — demo mode + Spotify Web Playback SDK
+       5. Spotify OAuth PKCE flow
+       6. UI rendering (catalog, recs, twins, log, wrapped)
+       7. Init
+════════════════════════════════════════════════════════════ -->
+<script>
+
+/* ─── 1. SONG CATALOG ───────────────────────────────────── */
+const SONGS = [
+  {id:"Blinding Lights",     artist:"The Weeknd",                     genre:"Pop",      emoji:"🌙"},
+  {id:"HUMBLE.",             artist:"Kendrick Lamar",                 genre:"Hip-Hop",  emoji:"👑"},
+  {id:"Levitating",          artist:"Dua Lipa",                       genre:"Pop",      emoji:"✨"},
+  {id:"bad guy",             artist:"Billie Eilish",                  genre:"Indie Pop",emoji:"🖤"},
+  {id:"God's Plan",          artist:"Drake",                          genre:"Hip-Hop",  emoji:"🙏"},
+  {id:"As It Was",           artist:"Harry Styles",                   genre:"Pop",      emoji:"💚"},
+  {id:"MONTERO",             artist:"Lil Nas X",                      genre:"Hip-Hop",  emoji:"🔥"},
+  {id:"drivers license",     artist:"Olivia Rodrigo",                 genre:"Pop",      emoji:"🚗"},
+  {id:"Watermelon Sugar",    artist:"Harry Styles",                   genre:"Pop",      emoji:"🍉"},
+  {id:"Peaches",             artist:"Justin Bieber",                  genre:"R&B",      emoji:"🍑"},
+  {id:"Industry Baby",       artist:"Lil Nas X",                      genre:"Hip-Hop",  emoji:"🏭"},
+  {id:"good 4 u",            artist:"Olivia Rodrigo",                 genre:"Pop Rock", emoji:"😤"},
+  {id:"Leave The Door Open", artist:"Bruno Mars",                     genre:"R&B",      emoji:"🚪"},
+  {id:"STAY",                artist:"The Kid LAROI & Justin Bieber",  genre:"Pop",      emoji:"💙"},
+  {id:"Heat Waves",          artist:"Glass Animals",                  genre:"Indie",    emoji:"🌊"},
+];
+
+/* ─── 2. PRE-DEFINED USER DATA ──────────────────────────── */
+const USERS = {
+  user_01:{"As It Was":0.9,"Blinding Lights":0.9,"God's Plan":0.1,"HUMBLE.":0.1,"Heat Waves":0.5,"Industry Baby":0.1,"Leave The Door Open":0.1,"Levitating":0.9,"MONTERO":0.5,"Peaches":0.1,"STAY":0.9,"Watermelon Sugar":0.9,"bad guy":0.1,"drivers license":0.9,"good 4 u":0.5},
+  user_02:{"As It Was":0.5,"Blinding Lights":0.9,"God's Plan":0.1,"HUMBLE.":0.1,"Heat Waves":0.5,"Industry Baby":0.1,"Leave The Door Open":0.1,"Levitating":0.9,"MONTERO":0.1,"Peaches":0.9,"STAY":0.5,"Watermelon Sugar":0.9,"bad guy":0.5,"drivers license":0.9,"good 4 u":0.1},
+  user_03:{"As It Was":0.1,"Blinding Lights":0.1,"God's Plan":0.9,"HUMBLE.":0.9,"Heat Waves":0.1,"Industry Baby":0.9,"Leave The Door Open":0.1,"Levitating":0.1,"MONTERO":0.5,"Peaches":0.5,"STAY":0.1,"Watermelon Sugar":0.5,"bad guy":0.9,"drivers license":0.1,"good 4 u":0.1},
+  user_04:{"As It Was":0.5,"Blinding Lights":0.1,"God's Plan":0.9,"HUMBLE.":0.9,"Heat Waves":0.5,"Industry Baby":0.9,"Leave The Door Open":0.1,"Levitating":0.1,"MONTERO":0.9,"Peaches":0.1,"STAY":0.1,"Watermelon Sugar":0.9,"bad guy":0.5,"drivers license":0.1,"good 4 u":0.1},
+  user_05:{"As It Was":0.9,"Blinding Lights":0.9,"God's Plan":0.9,"HUMBLE.":0.5,"Heat Waves":0.5,"Industry Baby":0.1,"Leave The Door Open":0.5,"Levitating":0.5,"MONTERO":0.1,"Peaches":0.9,"STAY":0.5,"Watermelon Sugar":0.5,"bad guy":0.5,"drivers license":0.1,"good 4 u":0.5},
+  user_06:{"As It Was":0.9,"Blinding Lights":0.9,"God's Plan":0.1,"HUMBLE.":0.5,"Heat Waves":0.1,"Industry Baby":0.1,"Leave The Door Open":0.9,"Levitating":0.9,"MONTERO":0.1,"Peaches":0.9,"STAY":0.9,"Watermelon Sugar":0.5,"bad guy":0.1,"drivers license":0.9,"good 4 u":0.9},
+  user_07:{"As It Was":0.5,"Blinding Lights":0.1,"God's Plan":0.1,"HUMBLE.":0.5,"Heat Waves":0.9,"Industry Baby":0.1,"Leave The Door Open":0.1,"Levitating":0.9,"MONTERO":0.9,"Peaches":0.5,"STAY":0.5,"Watermelon Sugar":0.9,"bad guy":0.9,"drivers license":0.5,"good 4 u":0.5},
+  user_08:{"As It Was":0.5,"Blinding Lights":0.9,"God's Plan":0.9,"HUMBLE.":0.1,"Heat Waves":0.1,"Industry Baby":0.9,"Leave The Door Open":0.5,"Levitating":0.9,"MONTERO":0.1,"Peaches":0.9,"STAY":0.9,"Watermelon Sugar":0.9,"bad guy":0.5,"drivers license":0.9,"good 4 u":0.9},
+  user_09:{"As It Was":0.5,"Blinding Lights":0.9,"God's Plan":0.9,"HUMBLE.":0.9,"Heat Waves":0.1,"Industry Baby":0.9,"Leave The Door Open":0.5,"Levitating":0.9,"MONTERO":0.9,"Peaches":0.5,"STAY":0.9,"Watermelon Sugar":0.9,"bad guy":0.1,"drivers license":0.9,"good 4 u":0.1},
+};
+
+/* ─── 3. STATE ──────────────────────────────────────────── */
+let currentUser = {};
+let counts = {skip:0, play:0, replay:0};
+const THRESHOLD = 5;
+
+/* ─── 4. COLLABORATIVE FILTERING ENGINE ────────────────── */
+
+// Cosine similarity: measures the angle between two listening vectors.
+// A user who loves Pop and hates Hip-Hop will point in the same direction
+// as another Pop-lover, regardless of how much either user has listened.
+// Result: 1.0 = identical direction (taste), 0.0 = opposite direction.
+function cosineSim(a, b) {
+  const shared = Object.keys(a).filter(k => k in b);
+  if (!shared.length) return 0;
+  let dot=0, mA=0, mB=0;
+  shared.forEach(k => { dot+=a[k]*b[k]; mA+=a[k]*a[k]; mB+=b[k]*b[k]; });
+  const d = Math.sqrt(mA) * Math.sqrt(mB);
+  return d === 0 ? 0 : dot/d;
+}
+
+// Main CF function: find taste twins, predict scores for unheard songs.
+// Returns { recs: [...], sims: [...] }
+function runCF() {
+  const rated = Object.keys(currentUser);
+  if (!rated.length) return {recs:[], sims:[]};
+
+  // Score all 9 pre-defined users by similarity to current user
+  const sims = Object.entries(USERS)
+    .map(([uid, scores]) => ({uid, sim: cosineSim(currentUser, scores)}))
+    .sort((a,b) => b.sim - a.sim);
+
+  // Top 3 neighbors (taste twins)
+  const neighbors = sims.slice(0,3).filter(n => n.sim > 0);
+
+  // Predict scores for unheard songs using weighted average
+  const unheard = SONGS.filter(s => !(s.id in currentUser));
+  const preds = unheard.map(song => {
+    let wSum=0, sSum=0;
+    neighbors.forEach(({uid, sim}) => {
+      const sc = USERS[uid][song.id];
+      if (sc !== undefined) { wSum += sim*sc; sSum += sim; }
+    });
+    return {...song, score: sSum > 0 ? wSum/sSum : 0};
+  })
+  .filter(s => s.score > 0)
+  .sort((a,b) => b.score - a.score)
+  .slice(0,5);
+
+  return {recs: preds, sims: sims.slice(0,9)};
+}
+
+/* ─── 5. PLAYBACK — DEMO MODE ───────────────────────────── */
+// Demo mode simulates audio playback with a progress bar timer.
+// When Spotify Premium is connected, the Web Playback SDK takes over.
+let pbState = {playing:false, song:null, elapsed:0, duration:210, timer:null};
+let spotifyPlayer = null;
+let spotifyToken  = null;
+let premiumMode   = false;
+
+function pbLoad(song) {
+  pbState.song = song;
+  pbState.elapsed = 0;
+  pbState.duration = 180 + Math.floor(Math.random()*60);
+
+  document.getElementById('pb-name').textContent = song.id;
+  document.getElementById('pb-artist').textContent = song.artist;
+  document.getElementById('pb-art').textContent = song.emoji;
+  document.getElementById('pb-track').classList.remove('pb-idle');
+  document.getElementById('pb-duration').textContent = fmtTime(pbState.duration);
+  updatePbFill();
+
+  // Highlight now-playing row
+  document.querySelectorAll('.song-row').forEach(r => r.classList.remove('now-playing'));
+  const idx = SONGS.findIndex(s => s.id === song.id);
+  if (idx >= 0) document.getElementById('sr-'+idx)?.classList.add('now-playing');
+
+  // Spotify Premium: use SDK
+  if (premiumMode && spotifyPlayer && spotifyToken) {
+    searchAndPlay(song.id, song.artist);
+  }
+}
+
+function pbPlay() {
+  if (!pbState.song) return;
+  pbState.playing = true;
+  document.getElementById('pb-icon-play').style.display  = 'none';
+  document.getElementById('pb-icon-pause').style.display = 'block';
+  if (!premiumMode) startDemoTimer();
+}
+function pbPause() {
+  pbState.playing = false;
+  document.getElementById('pb-icon-play').style.display  = 'block';
+  document.getElementById('pb-icon-pause').style.display = 'none';
+  clearInterval(pbState.timer); pbState.timer = null;
+  if (premiumMode && spotifyPlayer) spotifyPlayer.pause();
+}
+function pbToggle() {
+  if (!pbState.song) return;
+  pbState.playing ? pbPause() : pbPlay();
+}
+function pbStop() {
+  pbPause();
+  pbState.elapsed = 0; updatePbFill();
+  document.getElementById('pb-elapsed').textContent = '0:00';
+  document.querySelectorAll('.song-row').forEach(r => r.classList.remove('now-playing'));
+  if (premiumMode && spotifyPlayer) spotifyPlayer.pause();
+}
+function pbSeek(e) {
+  const bar = e.currentTarget;
+  const pct = e.offsetX / bar.offsetWidth;
+  pbState.elapsed = Math.floor(pct * pbState.duration);
+  updatePbFill();
+}
+function startDemoTimer() {
+  clearInterval(pbState.timer);
+  pbState.timer = setInterval(() => {
+    if (!pbState.playing) return;
+    pbState.elapsed++;
+    if (pbState.elapsed >= pbState.duration) {
+      pbState.elapsed = pbState.duration; pbPause();
+    }
+    updatePbFill();
+  }, 1000);
+}
+function updatePbFill() {
+  const pct = pbState.duration > 0 ? (pbState.elapsed/pbState.duration)*100 : 0;
+  document.getElementById('pb-fill').style.width = pct+'%';
+  document.getElementById('pb-elapsed').textContent = fmtTime(pbState.elapsed);
+}
+function fmtTime(s) {
+  return Math.floor(s/60)+':'+(s%60).toString().padStart(2,'0');
+}
+function setVolume(v) {
+  if (premiumMode && spotifyPlayer) spotifyPlayer.setVolume(v/100);
+}
+
+/* ─── 6. SPOTIFY OAUTH PKCE ─────────────────────────────── */
+// OAuth PKCE flow: no client secret needed for public apps.
+// We generate a code verifier, create its SHA-256 challenge,
+// redirect to Spotify auth, and exchange the code for a token.
+const CLIENT_ID   = 'b586d81f528c4bc29c12141188543ec1';
+const REDIRECT_URI = window.location.href.split('?')[0].split('#')[0];
+const SCOPES = 'streaming user-read-email user-read-private user-modify-playback-state';
+
+function randomStr(len) {
+  const chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  let s='';
+  const arr = new Uint8Array(len);
+  crypto.getRandomValues(arr);
+  arr.forEach(b => s += chars[b % chars.length]);
+  return s;
+}
+async function sha256(plain) {
+  const enc = new TextEncoder().encode(plain);
+  const hash = await crypto.subtle.digest('SHA-256', enc);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+async function handleSpotifyConnect() {
+  const btn = document.getElementById('btn-connect');
+  if (premiumMode) {
+    // Disconnect
+    spotifyPlayer && spotifyPlayer.disconnect();
+    premiumMode = false; spotifyToken = null;
+    btn.textContent = 'Connect Spotify Premium';
+    btn.classList.remove('connected');
+    document.getElementById('mode-pill').className = 'mode-pill mode-demo';
+    document.getElementById('mode-pill').textContent = 'Demo Mode';
+    document.getElementById('connect-note').textContent = 'Connect Spotify Premium to stream real audio.';
+    return;
+  }
+  // Start PKCE flow
+  const verifier  = randomStr(64);
+  const challenge = await sha256(verifier);
+  sessionStorage.setItem('pkce_verifier', verifier);
+
+  const params = new URLSearchParams({
+    client_id:    CLIENT_ID,
+    response_type:'code',
+    redirect_uri: REDIRECT_URI,
+    code_challenge_method:'S256',
+    code_challenge: challenge,
+    scope: SCOPES,
+  });
+  window.location = 'https://accounts.spotify.com/authorize?'+params;
+}
+
+async function exchangeCodeForToken(code) {
+  const verifier = sessionStorage.getItem('pkce_verifier');
+  if (!verifier) return null;
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({
+      grant_type:'authorization_code',
+      code, redirect_uri: REDIRECT_URI,
+      client_id: CLIENT_ID, code_verifier: verifier,
+    })
+  });
+  const data = await res.json();
+  sessionStorage.removeItem('pkce_verifier');
+  return data.access_token || null;
+}
+
+function initSpotifySDK(token) {
+  window.onSpotifyWebPlaybackSDKReady = () => {
+    spotifyPlayer = new Spotify.Player({
+      name:'MIS 432 Recommender',
+      getOAuthToken: cb => cb(token),
+      volume: 0.8,
+    });
+    spotifyPlayer.addListener('ready', ({device_id}) => {
+      sessionStorage.setItem('spotify_device', device_id);
+      premiumMode = true;
+      const btn = document.getElementById('btn-connect');
+      btn.classList.add('connected');
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Spotify Connected`;
+      document.getElementById('mode-pill').className = 'mode-pill mode-premium';
+      document.getElementById('mode-pill').textContent = 'Premium';
+      document.getElementById('connect-note').textContent = 'Streaming real audio via Spotify Web Playback SDK.';
+    });
+    spotifyPlayer.connect();
+  };
+  const s = document.createElement('script');
+  s.src = 'https://sdk.scdn.co/spotify-player.js';
+  document.head.appendChild(s);
+}
+
+async function searchAndPlay(title, artist) {
+  if (!spotifyToken) return;
+  const q = encodeURIComponent(`track:${title} artist:${artist}`);
+  const res = await fetch(`https://api.spotify.com/v1/search?q=${q}&type=track&limit=1`, {
+    headers:{Authorization:`Bearer ${spotifyToken}`}
+  });
+  const data = await res.json();
+  const uri = data.tracks?.items?.[0]?.uri;
+  if (!uri) return;
+  const device = sessionStorage.getItem('spotify_device');
+  await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${device}`, {
+    method:'PUT',
+    headers:{Authorization:`Bearer ${spotifyToken}`,'Content-Type':'application/json'},
+    body: JSON.stringify({uris:[uri]})
+  });
+}
+
+// Check for OAuth callback on page load
+async function checkOAuthCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return;
+  // Clean URL
+  window.history.replaceState({}, '', window.location.pathname);
+  const token = await exchangeCodeForToken(code);
+  if (!token) return;
+  spotifyToken = token;
+  initSpotifySDK(token);
+}
+
+/* ─── 7. INTERACTION HANDLER ────────────────────────────── */
+function rate(idx, action) {
+  const song  = SONGS[idx];
+  const score = action==='skip'?0.1:action==='play'?0.5:0.9;
+  const was   = song.id in currentUser;
+  const old   = was?(currentUser[song.id]===0.1?'skip':currentUser[song.id]===0.5?'play':'replay'):null;
+
+  currentUser[song.id] = score;
+  if (was && old && old!==action) counts[old]--;
+  if (!was || old!==action) counts[action]++;
+
+  // Update row highlight
+  const row = document.getElementById('sr-'+idx);
+  row.classList.add('interacted');
+  row.querySelectorAll('.btn').forEach(b=>b.classList.remove('active'));
+  row.querySelector('.btn-'+action).classList.add('active');
+
+  // Update stat counters
+  document.getElementById('cnt-s').textContent = counts.skip;
+  document.getElementById('cnt-p').textContent = counts.play;
+  document.getElementById('cnt-r').textContent = counts.replay;
+
+  // Log the signal
+  logSignal(song.id, song.artist, action, score);
+
+  // Load into playbar if play or replay
+  if (action==='play'||action==='replay') {
+    pbLoad(song); pbPlay();
+  } else if (pbState.song?.id === song.id) {
+    pbStop();
+  }
+
+  // Re-run CF
+  renderRecs();
+
+  // Update Wrapped button
+  const rated = Object.keys(currentUser).length;
+  if (rated >= THRESHOLD) {
+    document.getElementById('btn-wrapped').classList.add('ready');
+    document.getElementById('wp-prog').style.opacity='0';
+  } else {
+    const n = THRESHOLD - rated;
+    document.getElementById('wp-prog').style.opacity='1';
+    document.getElementById('wp-prog').textContent = `Rate ${n} more song${n!==1?'s':''} to unlock`;
+  }
+}
+
+/* ─── 8. SIGNAL LOG ─────────────────────────────────────── */
+function logSignal(song, artist, action, score) {
+  const box = document.getElementById('log-box');
+  const empty = box.querySelector('.log-empty');
+  if (empty) empty.remove();
+  const ts = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const cls = action==='skip'?'hl-s':action==='play'?'hl-p':'hl-r';
+  const row = document.createElement('div');
+  row.className='log-row';
+  row.innerHTML=`<span class="log-ts">${ts}</span><span class="log-msg"><span class="${cls}">[${action.toUpperCase()} · ${score}]</span> "${song}" — ${artist}</span>`;
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ─── 9. RENDER RECOMMENDATIONS ────────────────────────── */
+function renderRecs() {
+  const {recs, sims} = runCF();
+  const recList = document.getElementById('rec-list');
+
+  if (!recs.length) {
+    recList.innerHTML='<div class="no-data">Rate more songs — recommendations will appear here.</div>';
+  } else {
+    recList.innerHTML = recs.map((r,i)=>{
+      const pct = Math.round(r.score*100);
+      const gk  = 'gp-'+r.genre.replace(/[^a-zA-Z]/g,'-').replace(/-+/g,'-');
+      return `<div class="rec-card">
+        <div class="rc-rank">#${i+1} Recommended</div>
+        <div class="rc-name">${r.id}</div>
+        <div class="rc-meta">${r.artist} <span class="genre-pill ${gk}">${r.genre}</span></div>
+        <div class="score-bar-bg"><div class="score-bar" style="width:${pct}%"></div></div>
+        <div class="score-label">Predicted engagement: ${r.score.toFixed(2)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  const simList = document.getElementById('sim-list');
+  if (!sims.length || sims[0].sim===0) {
+    simList.innerHTML='<div class="no-data">Rate songs to see similarity scores.</div>';
+  } else {
+    const hues=[142,38,200,280,20,160,60,320,100];
+    simList.innerHTML = sims.map((s,i)=>{
+      const pct = Math.round(s.sim*100);
+      return `<div class="sim-row">
+        <span class="sim-lbl">${s.uid}</span>
+        <div class="sim-bar-bg"><div class="sim-bar" style="width:${pct}%;background:hsl(${hues[i]},60%,55%)"></div></div>
+        <span class="sim-val">${s.sim.toFixed(2)}</span>
+      </div>`;
+    }).join('');
+  }
+}
+
+/* ─── 10. RENDER CATALOG ────────────────────────────────── */
+function renderCatalog() {
+  const list = document.getElementById('song-list');
+  list.innerHTML = SONGS.map((s,i)=>{
+    const gk = 'gp-'+s.genre.replace(/[^a-zA-Z]/g,'-').replace(/-+/g,'-');
+    return `<div class="song-row" id="sr-${i}">
+      <span class="song-num" id="sn-${i}">${i+1}</span>
+      <div class="song-info">
+        <div class="sname">${s.id}<span class="genre-pill ${gk}">${s.genre}</span></div>
+        <div class="smeta">${s.artist}</div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-skip"   onclick="rate(${i},'skip'  )">Skip</button>
+        <button class="btn btn-play"   onclick="rate(${i},'play'  )">Play</button>
+        <button class="btn btn-replay" onclick="rate(${i},'replay')">Replay</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ─── 11. GENERATE WRAPPED ──────────────────────────────── */
+// Wrapped is computed entirely from currentUser{} — the exact same
+// dictionary powering the recommendations. No new data collected.
+function generateWrapped() {
+  const entries = Object.entries(currentUser);
+  if (entries.length < THRESHOLD) return;
+
+  // Top 3 songs by score
+  const top3 = entries
+    .map(([id,sc])=>{const m=SONGS.find(s=>s.id===id); return{id,sc,artist:m.artist,genre:m.genre,emoji:m.emoji}})
+    .sort((a,b)=>b.sc-a.sc).slice(0,3);
+
+  // Top artist (highest avg score)
+  const aMap={};
+  entries.forEach(([id,sc])=>{const m=SONGS.find(s=>s.id===id);if(!aMap[m.artist])aMap[m.artist]={t:0,c:0};aMap[m.artist].t+=sc;aMap[m.artist].c++;});
+  const topArtist = Object.entries(aMap).map(([a,{t,c}])=>({artist:a,avg:t/c})).sort((a,b)=>b.avg-a.avg)[0];
+
+  // Top genre
+  const gMap={};
+  entries.forEach(([id,sc])=>{const m=SONGS.find(s=>s.id===id);if(!gMap[m.genre])gMap[m.genre]={t:0,c:0};gMap[m.genre].t+=sc;gMap[m.genre].c++;});
+  const topGenre = Object.entries(gMap).map(([g,{t,c}])=>({genre:g,avg:t/c})).sort((a,b)=>b.avg-a.avg)[0];
+
+  const total  = entries.length;
+  const reps   = entries.filter(([,s])=>s>=0.9).length;
+  const skips  = entries.filter(([,s])=>s<=0.1).length;
+  const plays  = total - reps - skips;
+
+  // Personalised % line: compare to pre-defined users
+  const artistSongs = SONGS.filter(s=>s.artist===topArtist.artist).map(s=>s.id);
+  const userAvg = topArtist.avg;
+  const preAvgs = Object.values(USERS).map(u=>{
+    const rel=artistSongs.filter(id=>id in u);
+    return rel.length ? rel.reduce((s,id)=>s+u[id],0)/rel.length : 0;
+  });
+  const lower = preAvgs.filter(s=>s<userAvg).length;
+  const pct   = Math.max(10, Math.min(99, Math.round((lower/preAvgs.length)*100)));
+
+  // Score pill helper
+  const pill = sc => sc>=0.9
+    ? `<span class="wps-pill pp-replay">Replay</span>`
+    : sc>=0.5 ? `<span class="wps-pill pp-play">Played</span>`
+    : `<span class="wps-pill pp-skip">Skipped</span>`;
+
+  const panel = document.getElementById('wrapped-panel');
+  panel.innerHTML = `
+    <div class="wp-header">
+      <span class="wp-badge">2025 Wrapped</span>
+      <div>
+        <div class="wp-title">Your Session Wrapped</div>
+        <div class="wp-sub">Based on ${total} interaction${total!==1?'s':''} this session</div>
+      </div>
+    </div>
+    <div class="wp-stats">
+      <div class="wp-stat"><div class="wsn">${total}</div><div class="wsl">Songs rated</div></div>
+      <div class="wp-stat"><div class="wsn" style="color:var(--replay)">${reps}</div><div class="wsl">Replayed</div></div>
+      <div class="wp-stat"><div class="wsn" style="color:var(--play)">${plays}</div><div class="wsl">Played once</div></div>
+      <div class="wp-stat"><div class="wsn" style="color:var(--skip)">${skips}</div><div class="wsl">Skipped</div></div>
+    </div>
+    <div class="panel-title" style="margin-bottom:10px">Your Top Songs</div>
+    <div class="wp-songs">
+      ${top3.map((s,i)=>`
+      <div class="wp-song-row">
+        <span class="wps-rank">${i+1}</span>
+        <div class="wps-info">
+          <div class="wps-name">${s.emoji} ${s.id}</div>
+          <div class="wps-meta">${s.artist} · ${s.genre}</div>
+        </div>
+        ${pill(s.sc)}
+      </div>`).join('')}
+    </div>
+    <div class="wp-highlights">
+      <div class="wp-hl">
+        <div class="whl-lbl">Top Artist</div>
+        <div class="whl-val">${topArtist.artist}</div>
+        <div class="whl-sub">Avg. engagement ${topArtist.avg.toFixed(2)}</div>
+      </div>
+      <div class="wp-hl">
+        <div class="whl-lbl">Top Genre</div>
+        <div class="whl-val">${topGenre.genre}</div>
+        <div class="whl-sub">Avg. engagement ${topGenre.avg.toFixed(2)}</div>
+      </div>
+    </div>
+    <div class="wp-fun">
+      You were in the <strong>top ${pct}%</strong> of <strong>${topArtist.artist}</strong> listeners this session —
+      your average engagement of <strong>${userAvg.toFixed(2)}</strong> outscored ${lower} of ${preAvgs.length} other listeners in the dataset.
+    </div>
+    <div class="wp-note">
+      <span class="wp-note-icon">ℹ</span>
+      <span>This Wrapped was generated from the exact same data log that powered your recommendations above.
+      Every skip, play, and replay you clicked was recorded as an implicit engagement signal (0.1 / 0.5 / 0.9) —
+      no star ratings needed. That is the same mechanism Spotify uses at 751 million users.
+      Wrapped costs Spotify almost nothing to produce because it runs on infrastructure that already exists for recommendations.</span>
+    </div>
+  `;
+  panel.classList.add('show');
+  panel.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+/* ─── 12. INIT ──────────────────────────────────────────── */
+renderCatalog();
+checkOAuthCallback();
+
+</script>
+</body>
+</html>
